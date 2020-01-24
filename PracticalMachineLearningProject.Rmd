@@ -1,0 +1,142 @@
+---
+title: "Practical Machine Learning Project Report"
+author: "by Gregory Verleysen"
+output:
+  html_document:
+    fig_height: 9
+    fig_width: 9
+  pdf_document: default
+  word_document: default
+---
+
+## Introduction  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
+
+In this project, we will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they did the exercise.  
+
+```{r,echo=FALSE, include=FALSE}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+library(e1071)
+library(rattle)
+library(doParallel)
+library(RColorBrewer)				
+library(party)					
+library(partykit)	
+```
+
+### Download data
+```{r, cache = T}
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainFile)) {
+  download.file(trainUrl, destfile=trainFile, method="curl")
+}
+if (!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile, method="curl")
+}
+```  
+
+### Import data
+The two csv files will be imported as training data and testing data.  
+```{r, cache = T}
+train <- read.csv("./data/pml-training.csv")
+test <- read.csv("./data/pml-testing.csv")
+```
+The training data set contains `r dim(train)[1]` observations and `r dim(train)[2]` variables. The testing data set contains `r dim(test)[1]` observations and `r dim(test)[2]` variables.  
+
+### Clean data
+In this step, we will clean the data and get rid of observations with missing values as well as some meaningless variables.
+```{r, cache = T}
+sum(complete.cases(train))
+```
+First I will remove the unimportant variables.
+```{r, cache = T}
+col.rm <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")
+train.rm <- which(colnames(train) %in% col.rm)
+train <- train[, -train.rm]
+```
+Next I will remove missing values.
+```{r, cache = T}
+train <- train[, colSums(is.na(train)) == 0] 
+test <- test[, colSums(is.na(test)) == 0] 
+```
+Finally I will remove the variables that have variance close to zero.
+```{r, cache = T}
+train<-train[,-nearZeroVar(train)]
+```
+
+### Slice the data
+Then, I will split the clean data into a pure training data set (70%) and a validation data set (30%).  
+```{r, cache = T}
+set.seed(1234) # for reproduceability
+inTrain <- createDataPartition(train$classe, p=0.70, list=F)
+trainData <- train[inTrain, ]
+testData <- train[-inTrain, ]
+```
+
+### Data Modeling
+I will start by fitting a decision tree model. 
+```{r, cache = T}
+## Data Modeling
+##Decision Tree Prediction
+DTmod <- rpart(classe ~ ., data = trainData, method = "class")
+```
+
+```{r,cache = T}
+prp(DTmod) # fast plot
+```
+
+
+```{r}
+DTpredict <- predict(DTmod, testData, type = "class")
+confusionMatrix(DTpredict, testData$classe)
+```
+
+The accuracy for the decision tree model is `r as.numeric(confusionMatrix(DTpredict, testData$classe)$overall["Accuracy"])`. Thus the out of sample error is  `r 1-as.numeric(confusionMatrix(DTpredict, testData$classe)$overall["Accuracy"])`. I will continue to improve this accuracy by moving to random forest models. I will also be using 5 fold cross-validation.
+
+```{r}
+numFolds <- trainControl(method = "cv", number = 5)
+```
+
+
+```{r, cache = T}
+# Training Random Forest 
+# parallel processing to increase the training speed
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+RFmod <- train(classe ~ ., data=trainData, method="rf", trControl=numFolds)
+pred1 <- predict(RFmod, testData)
+stopCluster(cl)
+```
+
+```{r}
+## Displaying the confusion matrix
+confusionMatrix(pred1, testData$classe)
+```
+
+Applying the random forest model to the test part of the data gives an accuracy of `r as.numeric(confusionMatrix(pred1, testData$classe)$overall["Accuracy"])`. Thus the out of sample error is `r 1-as.numeric(confusionMatrix(pred1, testData$classe)$overall["Accuracy"])`.
+
+```{r, cache = T}
+## Importance of predictors
+print(plot(varImp(RFmod)))
+``` 
+
+The importance plot shows that the more important predictors are: roll_belt, pitch_forearm, yaw_belt, magnet_dumbbell_z, pitch_belt and magnet_dumbbell_y.
+
+### Predicting the test data
+Finally I use the model to predict the test dataset.
+
+```{r, cache = T}
+## Prediction of new values
+predictions<- predict(RFmod,test)
+predictions
+```  
